@@ -1,3 +1,3 @@
-# Flow Forever
+# Flux
 
-A faithful sequel to the classic Flow Free game.
+A Numberlink game built in F#.
