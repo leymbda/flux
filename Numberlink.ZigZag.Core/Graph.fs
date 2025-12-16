@@ -1,4 +1,4 @@
-namespace Numberlink.Core
+namespace Numberlink.ZigZag.Core
 
 open System
 
@@ -17,7 +17,7 @@ type PathNode = {
 }
 
 type BridgeNode = {
-    Ids: Set<Guid>
+    Id: Guid
 }
 
 type Node =

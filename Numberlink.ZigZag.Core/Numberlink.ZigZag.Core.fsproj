@@ -7,7 +7,8 @@
 
   <ItemGroup>
     <Compile Include="Graph.fs" />
-    <Compile Include="GraphBuilder.fs" />
+    <Compile Include="Template.fs" />
+    <Compile Include="Wfc.fs" />
   </ItemGroup>
 
   <ItemGroup>

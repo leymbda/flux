@@ -3,5 +3,5 @@
     <File Path=".gitignore" />
     <File Path="README.md" />
   </Folder>
-  <Project Path="Numberlink.Core/Numberlink.Core.fsproj" Id="d14da3c0-875b-49b4-a9cb-57b7271a958e" />
+  <Project Path="Numberlink.ZigZag.Core/Numberlink.ZigZag.Core.fsproj" Id="d14da3c0-875b-49b4-a9cb-57b7271a958e" />
 </Solution>
