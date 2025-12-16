@@ -3,10 +3,4 @@
     <File Path=".gitignore" />
     <File Path="README.md" />
   </Folder>
-  <Folder Name="/Tests/">
-    <Project Path="Tests/FlowForever.Domain.Tests.Unit/FlowForever.Domain.Tests.Unit.fsproj" Id="6e7563db-092e-4cbb-b34f-a197bec1a429" />
-  </Folder>
-  <Project Path="FlowForever.Application/FlowForever.Application.fsproj" Id="7cab9130-9150-41fe-a421-c9b28f496b45" />
-  <Project Path="FlowForever.Domain/FlowForever.Domain.fsproj" />
-  <Project Path="FlowForever.Presentation.ConsoleApp/FlowForever.Presentation.ConsoleApp.fsproj" Id="6086d5ed-26c1-4629-839f-55bf5f39e0d7" />
 </Solution>
