@@ -6,13 +6,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Graph.fs" />
+    <Compile Include="lib\Graph.fs" />
+    <Compile Include="lib\WaveFunctionCollapse.fs" />
     <Compile Include="Template.fs" />
-    <Compile Include="Wfc.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FsToolkit.ErrorHandling" Version="5.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Level.fs" />
+    <Folder Include="Lib\" />
   </ItemGroup>
 
 </Project>
