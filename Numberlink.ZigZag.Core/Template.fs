@@ -3,6 +3,9 @@ namespace Numberlink.ZigZag.Core
 open Numberlink.ZigZag.Core.Lib
 open System
 
+type Coordinate =
+    | Orthogonal of int * int
+
 type TemplateVertex =
     | Unknown
     | Bridge
@@ -10,6 +13,7 @@ type TemplateVertex =
 type Template = {
     Id: Guid
     Graph: Graph<TemplateVertex, unit>
+    Layout: Map<Guid, Coordinate>
 }
 
 module Template =
@@ -17,22 +21,25 @@ module Template =
     let create id = {
         Id = id
         Graph = Graph.empty
+        Layout = Map.empty
     }
 
     /// Add an uncomputed vertex to the template graph to generate levels off.
-    let addVertex (vertexId: Guid) (template: Template) =
+    let addVertex vertexId coordinate (template: Template) =
         let graph = Graph.addVertex vertexId Unknown template.Graph
+        let layout = Map.add vertexId coordinate template.Layout
 
-        { template with Graph = graph }
+        { template with Graph = graph; Layout = layout }
 
     /// Add a bridge vertex to the template graph.
-    let addBridge (vertexId: Guid) (template: Template) =
+    let addBridge vertexId coordinate (template: Template) =
         let graph = Graph.addVertex vertexId Bridge template.Graph
+        let layout = Map.add vertexId coordinate template.Layout
         
-        { template with Graph = graph }
+        { template with Graph = graph; Layout = layout }
 
     /// Add an edge between two vertices in the template graph.
-    let addEdge (fromVertexId: Guid) (toVertexId: Guid) (edgeId: Guid) (template: Template) =
+    let addEdge fromVertexId toVertexId edgeId (template: Template) =
         let graph = Graph.addEdge fromVertexId toVertexId edgeId () template.Graph
         
         { template with Graph = graph }
@@ -40,5 +47,3 @@ module Template =
     /// Validate the template to ensure basic requirements to generate levels from it are met.
     let validate (template: Template) =
         raise<bool> (System.NotImplementedException()) // TODO: Implement
-
-// TODO: Figure out how to represent how the template looks visually and add to template type
