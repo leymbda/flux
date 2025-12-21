@@ -6,6 +6,13 @@ open Numberlink.ZigZag.Core.Lib
 type TemplateVertexPosition =
     | Orthogonal of x: int * y: int
 
+module TemplateVertexPosition =
+    /// Check if two vertex positions are of the same type.
+    let isSameType pos1 pos2 =
+        match pos1, pos2 with
+        | Orthogonal _, Orthogonal _ -> true
+        //| _ -> false
+
 type TemplateVertexType =
     | Unobserved
     | Bridge
@@ -74,10 +81,59 @@ module Template =
 
     /// Validate the template for pre-generation requirements.
     let validate (template: Template) = result {
-        // TODO: Ensure vertices have the same vertex layout type
-        // TODO: Ensure edges connect existing vertices
-        // TODO: Ensure bridges have an even number of connections
-        // TODO: Ensure warps aren't stacked
+        // Ensure any vertices exist
+        do!
+            template.Graph
+            |> Graph.getVertices
+            |> Seq.isEmpty
+            |> Result.requireFalse "Template must contain at least one vertex"
 
-        do! Error "not implemented"
+        // Ensure all vertices have the same position type
+        let firstPosition =
+            template.Graph
+            |> Graph.getVertices
+            |> Seq.head
+            |> snd
+            |> _.Position
+
+        do!
+            template.Graph
+            |> Graph.getVertices
+            |> Seq.forall (fun (_, v) -> TemplateVertexPosition.isSameType firstPosition v.Position)
+            |> Result.requireTrue "All vertices must have the same position type"
+
+        // Ensure edges connect existing vertices
+        do!
+            template.Graph.AdjacencyList.EdgePairs
+            |> Map.values
+            |> Seq.collect (fun v -> [fst v; snd v])
+            |> Seq.distinct
+            |> Seq.forall (fun vertexId -> Map.containsKey vertexId template.Graph.Vertices)
+            |> Result.requireTrue "Adjacent list contains edges connecting non-existent vertices"
+
+        // Ensure bridges have an even number of connections
+        do!
+            template.Graph.Vertices
+            |> Map.toSeq
+            |> Seq.filter (fun (_, vertex) -> vertex.Type = Bridge)
+            |> Seq.forall (fun (vertexId, _) ->
+                template.Graph
+                |> Graph.getNeighbors vertexId
+                |> Seq.length
+                |> fun v -> v % 2 = 0
+            )
+            |> Result.requireTrue "Bridge vertices must have an even number of edges"
+
+        // Ensure warps aren't stacked
+        do!
+            template.Graph
+            |> Graph.getVertices
+            |> Seq.forall (fun (vertexId, _) ->
+                template.Graph
+                |> Graph.getNeighbors vertexId
+                |> Seq.filter (fun r -> r.Edge.Type = Warp)
+                |> Seq.length
+                |> (<=) 1
+            )
+            |> Result.requireTrue "Vertices cannot connect multiple warps"
     }

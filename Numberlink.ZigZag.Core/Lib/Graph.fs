@@ -16,14 +16,18 @@ module AdjacencyList =
         { Relations = relations; EdgePairs = edgePairs }
 
     /// Get the neighbors of a vertex by its ID, or an empty map if the vertex does not exist.
-    let get vertexId (adjacencyList: AdjacencyList) =
+    let getNeighbors vertexId (adjacencyList: AdjacencyList) =
         Map.tryFind vertexId adjacencyList.Relations |> Option.defaultValue Map.empty
+
+    /// Get the vertices connected by an edge by the edge's ID.
+    let getEdgeVertices edgeId (adjacencyList: AdjacencyList) =
+        Map.tryFind edgeId adjacencyList.EdgePairs
 
     /// Bidirectionally link two vertices in the adjacency list with the given edge.
     let link fromId toId edgeId (adjacencyList: AdjacencyList): AdjacencyList =
         let addLink vertexId1 vertexId2 edgeId al =
             let neighbors =
-                get vertexId1 al
+                getNeighbors vertexId1 al
                 |> Map.add vertexId2 edgeId
 
             let relations = Map.add vertexId1 neighbors al.Relations
@@ -39,7 +43,7 @@ module AdjacencyList =
     let unlink fromId toId (adjacencyList: AdjacencyList): AdjacencyList =
         let removeLink vertexId1 vertexId2 al =
             let neighbors =
-                get vertexId1 al
+                getNeighbors vertexId1 al
                 |> Map.remove vertexId2
 
             let relations =
@@ -61,7 +65,7 @@ module AdjacencyList =
 
     /// Remove a vertex from all neighbors.
     let removeVertex vertexId (adjacencyList: AdjacencyList): AdjacencyList =
-        get vertexId adjacencyList
+        getNeighbors vertexId adjacencyList
         |> Map.fold (fun al neighborId _ -> unlink vertexId neighborId al) adjacencyList
 
     /// Remove an edge from the adjacency list.
@@ -97,7 +101,7 @@ module Graph =
     /// Remove a vertex and its associated edges from the graph.
     let removeVertex vertexId (graph: Graph<'v, 'e>) =
         let edges =
-            AdjacencyList.get vertexId graph.AdjacencyList
+            AdjacencyList.getNeighbors vertexId graph.AdjacencyList
             |> Map.fold (fun edges _ edgeId -> Map.remove edgeId edges) graph.Edges
 
         let vertices = Map.remove vertexId graph.Vertices
@@ -126,13 +130,32 @@ module Graph =
     let getVertex vertexId (graph: Graph<'v, 'e>) =
         Map.tryFind vertexId graph.Vertices
 
+    /// Get all vertices in the graph as a sequence of (ID, vertex) pairs.
+    let getVertices (graph: Graph<'v, 'e>) =
+        graph.Vertices
+        |> Map.toSeq
+
     /// Get an edge by its ID.
     let getEdge edgeId (graph: Graph<'v, 'e>) =
         Map.tryFind edgeId graph.Edges
 
+    /// Get all edges in the graph as a sequence of (ID, edge) pairs.
+    let getEdges (graph: Graph<'v, 'e>) =
+        graph.Edges
+        |> Map.toSeq
+
+    /// Get the vertices connected by an edge by the edge's ID.
+    let getEdgeVertices edgeId (graph: Graph<'v, 'e>) =
+        AdjacencyList.getEdgeVertices edgeId graph.AdjacencyList
+        |> Option.bind (fun (fromId, toId) ->
+            match getVertex fromId graph, getVertex toId graph with
+            | Some fromVertex, Some toVertex -> Some (fromVertex, toVertex)
+            | _ -> None
+        )
+
     /// Get the relations of neighbors of a vertex by its ID, or an empty seq if the vertex does not exist.
     let getNeighbors vertexId (graph: Graph<'v, 'e>) =
-        AdjacencyList.get vertexId graph.AdjacencyList
+        AdjacencyList.getNeighbors vertexId graph.AdjacencyList
         |> Map.toSeq
         |> Seq.choose (fun (_, edgeId) ->
             match getEdge edgeId graph, getVertex vertexId graph with
