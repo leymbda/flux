@@ -5,42 +5,60 @@ open System
 type Domain<'s when 's : comparison> = Map<'s, float>
 
 module Domain =
-    /// Calculate the total weight of a domain.
-    let total (domain: Domain<'s>) =
+    let isEmpty domain =
+        Map.isEmpty domain
+
+    let count domain =
+        Map.count domain
+
+    let total domain =
         Map.fold (fun acc _ w -> acc + w) 0.0 domain
 
-    /// Calculate the entropy of a domain.
-    let entropy (domain: Domain<'s>) =
-        if Map.isEmpty domain then
-            0.0
+    let entropy domain =
+        if isEmpty domain then None
         else
-            let count = float (Map.count domain)
-            let total = total domain
-            let max = domain |> Map.toSeq |> Seq.map snd |> Seq.max
-            let tie = 1.0 - (max / total)
-            count + tie
+            domain
+            |> Map.toSeq
+            |> Seq.sumBy (fun (_, weight) ->
+                let total = total domain
+                let p = weight / total
+                if p > 0.0 then -p * log p else 0.0)
+            |> Some
 
-    /// Observe a domain by drawing a single state according to weights. Returns None if the domain is empty.
-    let observe (random: Random) (domain: Domain<'s>) =
-        let total = total domain
-        let pick = random.NextDouble() * total
+    let isSingleton domain =
+        count domain = 1
 
+    let getSingleton domain =
         domain
         |> Map.toSeq
-        |> Seq.fold
-            (fun (accState, accWeight) (state, weight) ->
-                if (accWeight > 0.0 && accWeight - weight <= 0.0) then (Some state, 0.0)
-                else (accState, accWeight - weight)
-            )
-            (None, pick)
+        |> Seq.head
         |> fst
 
-type Constraint<'v, 's, 'e, 'g when 's : comparison> = Guid -> Map<Guid, 's> -> Graph<'v, 'e> -> 'g -> float
+    let trySingleton domain =
+        if isSingleton domain then Some (getSingleton domain)
+        else None
 
-type StepResult<'v, 's, 'e, 'g when 's : comparison> =
-    | Contradiction
-    | Progress of WaveFunctionCollapse<'v, 's, 'e, 'g>
-    | Complete of WaveFunctionCollapse<'v, 's, 'e, 'g>
+    let choicesByWeight domain =
+        domain
+        |> Map.toList
+        |> List.sortByDescending snd
+        |> List.map fst
+
+    let observe (random: Random) domain =
+        let rec pick threshold remaining =
+            match remaining with
+            | [] -> None
+            | [(state, _)] -> Some state
+            | (state, weight) :: rest ->
+                if threshold <= weight then Some state
+                else pick (threshold - weight) rest
+
+        domain
+        |> Map.toList
+        |> pick (random.NextDouble() * total domain)
+
+type Constraint<'v, 's, 'e, 'g when 's : comparison> =
+    Guid -> Map<Guid, 's> -> Graph<'v, 'e> -> 'g -> float
 
 type WaveFunctionCollapse<'v, 's, 'e, 'g when 's : comparison> = {
     Random: Random
@@ -52,52 +70,136 @@ type WaveFunctionCollapse<'v, 's, 'e, 'g when 's : comparison> = {
 }
 
 module WaveFunctionCollapse =
-    /// Initialize a WFC model over a graph.
-    let init random initialDomains initialGlobalState constraints (graph: Graph<'v, 'e>) = {
-        Random = random;
-        Domains = initialDomains graph;
-        Collapsed = Map.empty;
-        GlobalState = initialGlobalState graph;
-        Constraints = constraints;
+    let private getNeighborIds vertexId graph =
+        AdjacencyList.getNeighbors vertexId graph.AdjacencyList
+        |> Map.toList
+        |> List.map fst
+
+    let private isUncollapsed wfc vertexId =
+        not (wfc.Collapsed.ContainsKey vertexId)
+
+    let init random initialDomains initialGlobalState constraints graph = {
+        Random = random
+        Domains = initialDomains graph
+        Collapsed = Map.empty
+        GlobalState = initialGlobalState graph
+        Constraints = constraints
         Graph = graph
     }
 
-    /// Get the ID of the uncollapsed vertex with the lowest entropy (with random tie-breaking), or None if all are
-    /// collapsed.
-    let tryPickLowestEntropy (wfc: WaveFunctionCollapse<'v, 's, 'e, 'g>) =
-        let randomChoice seq =
-            let i = wfc.Random.Next(Seq.length seq)
-            Seq.item i seq
+    let tryPickLowestEntropy wfc =
+        let candidates =
+            wfc.Domains
+            |> Map.toList
+            |> List.filter (fun (id, _) -> isUncollapsed wfc id)
+            |> List.choose (fun (id, d) -> Domain.entropy d |> Option.map (fun e -> id, e))
 
+        match candidates with
+        | [] -> None
+        | candidates ->
+            let minEntropy =
+                candidates
+                |> List.map snd
+                |> List.min
+
+            let ties =
+                candidates
+                |> List.filter (fun (_, e) -> e = minEntropy)
+                |> List.map fst
+
+            Some (List.item (wfc.Random.Next(List.length ties)) ties)
+
+    let applyConstraints vertexId wfc =
         wfc.Domains
-        |> Map.toSeq
-        |> Seq.filter (fun (vertexId, _) -> wfc.Collapsed.ContainsKey vertexId |> not)
-        |> Seq.map (fun (vertexId, domain) -> vertexId, Domain.entropy domain)
-        |> Seq.groupBy (fun (_, entropy) -> entropy)
-        |> Seq.sortBy (fun (entropy, _) -> entropy)
-        |> Seq.tryHead
-        |> Option.map (snd >> randomChoice >> fst)
+        |> Map.tryFind vertexId
+        |> Option.defaultValue Map.empty
+        |> Map.map (fun state weight ->
+            let hypothetical = Map.add vertexId state wfc.Collapsed
 
-    /// Perform a single step of the WFC algorithm.
-    let step (wfc: WaveFunctionCollapse<'v, 's, 'e, 'g>) =
-        match tryPickLowestEntropy wfc with
-        | None -> Complete wfc
-        | Some vertexId ->
-            match Map.find vertexId wfc.Domains with
-            | d when Map.isEmpty d -> Contradiction
-            | domain ->
-                let propagate (initialWork: Map<Guid, 's>) =
-                    // TODO: Propagate constraints and update domains accordingly
-                    Progress wfc
-                    
-                match Domain.observe wfc.Random domain with
-                | None -> Contradiction
-                | Some state -> propagate (Map.empty |> Map.add vertexId state)
+            let factor =
+                wfc.Constraints
+                |> List.fold (fun acc c -> acc * c vertexId hypothetical wfc.Graph wfc.GlobalState) 1.0
 
-    /// Run the WFC algorithm to completion or contradiction.
-    let run (wfc: WaveFunctionCollapse<'v, 's, 'e, 'g>) =
-        // TODO: Initial propagation (collapse vertices that are already guaranteed)
-        // TODO: Recursively step until complete or contradiction
-        // TODO: Handle contradictions (backtracking)
+            weight * factor
+        )
+        |> Map.filter (fun _ w -> w > 0.0)
 
-        wfc.Collapsed
+    let propagate newlyCollapsed wfc =
+        let rec loop queue processed wfc =
+            match queue with
+            | [] ->
+                Some wfc
+
+            | id :: rest when Set.contains id processed || wfc.Collapsed.ContainsKey id ->
+                loop rest processed wfc
+
+            | id :: rest ->
+                let domain = applyConstraints id wfc
+                if Domain.isEmpty domain then None
+                else
+                    let processed = Set.add id processed
+
+                    match Domain.trySingleton domain with
+                    | Some state ->
+                        let wfc = { wfc with
+                                        Domains = Map.remove id wfc.Domains
+                                        Collapsed = Map.add id state wfc.Collapsed }
+
+                        let newWork =
+                            getNeighborIds id wfc.Graph
+                            |> List.filter (fun n -> isUncollapsed wfc n && not (Set.contains n processed))
+
+                        loop (newWork @ rest) processed wfc
+
+                    | None ->
+                        let wfc = { wfc with Domains = Map.add id domain wfc.Domains }
+                        loop rest processed wfc
+
+        let initialWork =
+            newlyCollapsed
+            |> Map.toList
+            |> List.collect (fun (id, _) -> getNeighborIds id wfc.Graph)
+
+        let wfc = { wfc with Collapsed = Map.foldBack Map.add newlyCollapsed wfc.Collapsed }
+
+        loop initialWork Set.empty wfc
+
+    let collapseGuaranteed wfc =
+        let guaranteed =
+            wfc.Domains
+            |> Map.toList
+            |> List.choose (fun (id, d) ->
+                if isUncollapsed wfc id then Domain.trySingleton d |> Option.map (fun s -> id, s)
+                else None
+            )
+            |> Map.ofList
+
+        if Map.isEmpty guaranteed then Some wfc
+        else
+            let wfc = { wfc with Domains = Map.filter (fun id _ -> not (Map.containsKey id guaranteed)) wfc.Domains }
+            propagate guaranteed wfc
+
+    let run wfc =
+        let rec solve stack wfc =
+            match tryPickLowestEntropy wfc with
+            | None -> Some wfc.Collapsed
+            | Some id ->
+                match Map.tryFind id wfc.Domains with
+                | Some domain when not (Domain.isEmpty domain) ->
+                    tryChoices stack wfc id (Domain.choicesByWeight domain)
+                | _ -> backtrack stack
+
+        and tryChoices stack wfc id = function
+            | [] -> backtrack stack
+            | choice :: rest ->
+                let newStack = if List.isEmpty rest then stack else (wfc, id, rest) :: stack
+                match propagate (Map.ofList [ id, choice ]) wfc with
+                | Some wfc -> solve newStack wfc
+                | None -> tryChoices stack wfc id rest
+
+        and backtrack = function
+            | [] -> None
+            | (wfc, id, choices) :: rest -> tryChoices rest wfc id choices
+
+        collapseGuaranteed wfc
+        |> Option.bind (solve [])

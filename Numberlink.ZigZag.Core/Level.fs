@@ -7,3 +7,9 @@ type Level = {
     Template: Template
     Links: Guid list list
 }
+
+module Level =
+    let generate (id: Guid) (template: Template) =
+        let links = [] // TODO: Implement WFC and calculate links from generated graph
+
+        { Id = id; Template = template; Links = links }

@@ -3,5 +3,6 @@
     <File Path=".gitignore" />
     <File Path="README.md" />
   </Folder>
+  <Project Path="Flux.Tui/Flux.Tui.fsproj" Id="18bb7f03-e222-4081-9124-05bf255896f5" />
   <Project Path="Numberlink.ZigZag.Core/Numberlink.ZigZag.Core.fsproj" Id="d14da3c0-875b-49b4-a9cb-57b7271a958e" />
 </Solution>
