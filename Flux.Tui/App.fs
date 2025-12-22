@@ -5,7 +5,6 @@ open Numberlink.ZigZag.Core
 open Numberlink.ZigZag.Core.Lib
 open System
 open System.Threading
-open System.Threading.Tasks
 
 type Move =
     | Up
@@ -17,7 +16,7 @@ type Model = {
     Level: Level
     Selected: bool
     Position: int * int // TODO: How to handle other types of coordinate systems?
-    Lock: Lock
+    ConsoleLock: Lock
 }
 
 type Msg =
@@ -31,7 +30,7 @@ let init level: Model * Cmd<Msg> =
         Level = level
         Selected = false
         Position = 0, 0
-        Lock = Lock()
+        ConsoleLock = Lock()
     },
     Cmd.none
 
@@ -61,7 +60,7 @@ let update msg model: Model * Cmd<Msg> =
     | Exit -> model, Cmd.none
 
 let view model dispatch: unit =
-    lock model.Lock (fun () ->
+    lock model.ConsoleLock (fun () ->
         let coordinatesText = $"{fst model.Position}, {snd model.Position}"
         let selectedText = if model.Selected then "Selected" else "Not Selected"
         Console.Write($"\u001b[2K\r{coordinatesText} ({selectedText})")
@@ -82,9 +81,9 @@ let subscribe model: Sub<Msg> =
             let cts = new CancellationTokenSource()
             let ct = cts.Token
 
-            let input () =
+            async {
                 while not ct.IsCancellationRequested do
-                    lock model.Lock (fun () ->
+                    lock model.ConsoleLock (fun () ->
                         if Console.KeyAvailable then
                             let key = Console.ReadKey true |> _.Key
 
@@ -98,8 +97,12 @@ let subscribe model: Sub<Msg> =
                             | _ -> ()
                     )
 
-            Task.Run(input, ct) |> ignore
-            cts
+                    do! Async.Sleep 33
+            }
+            |> Async.StartAsTask
+            |> ignore
+
+            { new IDisposable with member _.Dispose() = cts.Cancel() }
     ]
 
 let program level =
