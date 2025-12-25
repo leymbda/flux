@@ -6,6 +6,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Lib\Extensions\List.fs" />
+    <Compile Include="Lib\Extensions\Map.fs" />
     <Compile Include="Lib\Graph.fs" />
     <Compile Include="Lib\WaveFunctionCollapse.fs" />
     <Compile Include="Template.fs" />

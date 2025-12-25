@@ -9,7 +9,12 @@ type Level = {
 }
 
 module Level =
-    let generate (id: Guid) (template: Template) =
-        let links = [] // TODO: Implement WFC and calculate links from generated graph
+    /// Create an existing level with predefined links.
+    let create levelId template links =
+        { Id = levelId; Template = template; Links = links }
 
-        { Id = id; Template = template; Links = links }
+    /// Generate a new level based on the given template.
+    let generate random levelId (template: Template) =
+        let links = Template.generate random template
+
+        { Id = levelId; Template = template; Links = links }

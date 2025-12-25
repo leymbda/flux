@@ -75,7 +75,9 @@ module AdjacencyList =
         | None -> adjacencyList
 
 type Relation<'v, 'e> = {
+    VertexId: Guid
     Vertex: 'v
+    EdgeId: Guid
     Edge: 'e
 }
 
@@ -159,7 +161,7 @@ module Graph =
         |> Map.toSeq
         |> Seq.choose (fun (_, edgeId) ->
             match getEdge edgeId graph, getVertex vertexId graph with
-            | Some edge, Some vertex -> Some { Vertex = vertex; Edge = edge }
+            | Some edge, Some vertex -> Some { VertexId = vertexId; Vertex = vertex; EdgeId = edgeId; Edge = edge }
             | _ -> None
         )
 

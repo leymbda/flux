@@ -57,7 +57,7 @@ module Domain =
         |> Map.toList
         |> pick (random.NextDouble() * total domain)
 
-type Constraint<'v, 's, 'e, 'g when 's : comparison> =
+type Constraint<'v, 'e, 'g, 's when 's : comparison> =
     Guid -> Map<Guid, 's> -> Graph<'v, 'e> -> 'g -> float
 
 type WaveFunctionCollapse<'v, 's, 'e, 'g when 's : comparison> = {
@@ -65,7 +65,7 @@ type WaveFunctionCollapse<'v, 's, 'e, 'g when 's : comparison> = {
     Domains: Map<Guid, Domain<'s>>
     Collapsed: Map<Guid, 's>
     GlobalState: 'g
-    Constraints: Constraint<'v, 's, 'e, 'g> list
+    Constraints: Constraint<'v, 'e, 'g, 's> list
     Graph: Graph<'v, 'e>
 }
 
