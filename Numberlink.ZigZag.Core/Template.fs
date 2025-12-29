@@ -147,6 +147,8 @@ module Template =
             )
             |> Result.requireTrue "Bridge vertices must have an even number of edges"
 
+        // TODO: Ensure bridge edges are properly formed with pairs (probably integrate into above check)
+
         // Ensure warps aren't stacked
         do!
             template.Graph

@@ -2,6 +2,9 @@
 open Numberlink.ZigZag.Core
 open System
 
+let seed = 1;
+let random = new Random(seed)
+
 let vertex1 = Guid.NewGuid()
 let vertex2 = Guid.NewGuid()
 let vertex3 = Guid.NewGuid()
@@ -41,7 +44,7 @@ let template =
     // 3x3 donut shape
 
 let level =
-    Level.generate (Guid.NewGuid()) template
+    Level.generate random (Guid.NewGuid()) template
     |> fun l ->
         { l with
             Links = [
@@ -53,5 +56,3 @@ let level =
     // Temporary until WFC implemented, tested, and working
 
 App.program level
-
-// TODO: Terminal.Gui may be a good idea in order to support mouse controls too (maybe use existing stuff put into a text view?)
