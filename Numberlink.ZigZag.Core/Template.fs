@@ -219,24 +219,24 @@ module Template =
             fun vertexId currentDomain collapsed graph ->
                 let neighbors = Graph.getNeighbors vertexId graph
 
+                let requiredEdges =
+                    neighbors
+                    |> Seq.collect (fun rel ->
+                        Map.tryFind rel.VertexId collapsed
+                        |> Option.map (GeneratorDomain.edges >> Seq.filter ((=) rel.EdgeId))
+                        |> Option.defaultValue Seq.empty
+                    )
+
+                let optionalEdges = // TODO: Should this consider potential uncollapsed neighbor domains?
+                    neighbors
+                    |> Seq.collect (fun rel ->
+                        Map.tryFind rel.VertexId collapsed
+                        |> Option.map (fun _ -> Seq.empty)
+                        |> Option.defaultValue (Seq.singleton rel.EdgeId)
+                    )
+
                 currentDomain
                 |> Map.map (fun domain weight ->
-                    let requiredEdges =
-                        neighbors
-                        |> Seq.collect (fun rel ->
-                            Map.tryFind rel.VertexId collapsed
-                            |> Option.map (GeneratorDomain.edges >> Seq.filter ((=) rel.EdgeId))
-                            |> Option.defaultValue Seq.empty
-                        )
-
-                    let optionalEdges = // TODO: Should this consider potential uncollapsed neighbor domains?
-                        neighbors
-                        |> Seq.collect (fun rel ->
-                            Map.tryFind rel.VertexId collapsed
-                            |> Option.map (fun _ -> Seq.empty)
-                            |> Option.defaultValue (Seq.singleton rel.EdgeId)
-                        )
-
                     /// Ensure neighboring edges are compatible with the current domain
                     let isEdgeConsistent =
                         match domain with
@@ -280,10 +280,17 @@ module Template =
                             | _, _ -> true
                         )
 
-                    if isEdgeConsistent && isTypeConsistent then weight
-                    else 0.0
+                    /// Ensure connected warps only connect compatible domains
+                    let isWarpConsistent =
+                        true
+                        
+                        // TODO: Warps need to have property in template to specify if they must be used in order to
+                        //       constrain appropriately for requirements. For now, a level could have warps but none
+                        //       be used. Once implemented, this check should ensure it so domains that don't use a
+                        //       required warp are rejected.
 
-                    // TODO: Ensure warp edges dont join incompatible domains
+                    if isEdgeConsistent && isTypeConsistent && isWarpConsistent then weight
+                    else 0.0
                 )
                 |> Map.filter (fun _ weight -> weight <> 0.0)
 
@@ -297,17 +304,11 @@ module Template =
             fun vertexId currentDomain collapsed graph ->
                 currentDomain // TODO: Implement
 
-        /// Multiply domain weights by multipliers defined in the generator state
+        /// Multiply domain weights by multipliers defined in the generator state, proportional to other possible states
         let weightMultiplierConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorDomain> =
             fun _ currentDomain _ _ ->
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Terminal _ -> weight //* (1.0 / 6.0)
-                    | _ -> weight
-                )
+                currentDomain // TODO: Implement
 
-        // TODO: Remove global state from WFC (cannot even be updated, so pointless)
         // TODO: Add extra constraints as needed e.g. bridge reflection constraint
 
         let constraints = [
