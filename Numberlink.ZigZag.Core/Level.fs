@@ -21,11 +21,26 @@ module Level =
             collapsed
             |> Map.iter (fun vertexId state ->
                 match state with
-                | GeneratorDomain.Terminal ->
-                    printfn "V %A: Terminal" vertexId
+                | GeneratorDomain.Terminal edge ->
+                    let neighbor =
+                        Graph.getNeighbors vertexId template.Graph
+                        |> Seq.find (fun rel -> rel.EdgeId = edge)
+                        |> _.VertexId
+
+                    printfn "V %A: Terminal connecting %A" vertexId neighbor
 
                 | GeneratorDomain.Bridge edges ->
-                    printfn "V %A: Bridge with %d edge pairs" vertexId (List.length edges)
+                    let neighbors =
+                        Graph.getNeighbors vertexId template.Graph
+                        |> Seq.filter (fun rel ->
+                            edges
+                            |> Seq.collect (fun (e1, e2) -> [e1; e2])
+                            |> Seq.contains rel.EdgeId
+                        )
+                        |> Seq.map _.VertexId
+                        |> Seq.toArray
+
+                    printfn "V %A: Bridge connecting %A" vertexId neighbors
                 
                 | GeneratorDomain.Path (edge1, edge2) ->
                     let neighbors =

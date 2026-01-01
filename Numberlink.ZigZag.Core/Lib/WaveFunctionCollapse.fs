@@ -75,8 +75,12 @@ module WaveFunctionCollapse =
         |> Map.toList
         |> List.map fst
 
+        // TODO: Use Graph.getNeighbors or create new graph function to get specifically neighbor vertex IDs
+
     let private isUncollapsed wfc vertexId =
         not (wfc.Collapsed.ContainsKey vertexId)
+
+        // TODO: Probably unnecessary, and incorrect ordering of params if kept
 
     let init random initialDomains initialGlobalState constraints graph = {
         Random = random
@@ -91,7 +95,7 @@ module WaveFunctionCollapse =
         let candidates =
             wfc.Domains
             |> Map.toList
-            |> List.filter (fun (id, _) -> isUncollapsed wfc id)
+            |> List.filter (fun (id, _) -> isUncollapsed wfc id) // TODO: Probably unnecessary as domains cleared when collapsed
             |> List.choose (fun (id, d) -> Domain.entropy d |> Option.map (fun e -> id, e))
 
         match candidates with
@@ -178,7 +182,7 @@ module WaveFunctionCollapse =
             match tryPickLowestEntropy wfc with
             | None -> Some wfc.Collapsed
             | Some id ->
-                match Map.tryFind id wfc.Domains with
+                match Map.tryFind id wfc.Domains with // TODO: Can probably just be Map.find or merge domain fetch into tryPickLowestEntropy
                 | Some domain when not (Domain.isEmpty domain) ->
                     tryChoices stack wfc id (Domain.choicesByWeight domain)
                 | _ -> backtrack stack
@@ -190,6 +194,8 @@ module WaveFunctionCollapse =
                 match propagate (Map.ofList [ id, choice ]) wfc with
                 | Some wfc -> solve newStack wfc
                 | None -> tryChoices stack wfc id rest
+
+            // TODO: Only picks lowest entropy choice, should randomise among choices
 
         and backtrack = function
             | [] -> None

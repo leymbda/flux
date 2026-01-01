@@ -9,9 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="lib\extensions\Array.fs" />
-    <Compile Include="lib\extensions\Array2D.fs" />
-    <Compile Include="lib\TerminalDisplay.fs" />
+    <Compile Include="Extensions\Array.fs" />
+    <Compile Include="Extensions\Array2D.fs" />
+    <Compile Include="Lib\TerminalDisplay.fs" />
     <Compile Include="App.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
@@ -25,7 +25,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Lib\Extensions\" />
+    <Folder Include="Extensions\" />
   </ItemGroup>
 
 </Project>

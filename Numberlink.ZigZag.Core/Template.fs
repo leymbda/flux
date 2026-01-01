@@ -10,9 +10,17 @@ type GeneratorState = {
 }
 
 type GeneratorDomain =
-    | Terminal
+    | Terminal of edge: Guid
     | Path of edges: Guid * Guid
     | Bridge of edges: (Guid * Guid) list
+
+module GeneratorDomain =
+    /// Get all edges used in a domain.
+    let edges domain =
+        match domain with
+        | Terminal e -> seq { e }
+        | Path (e1, e2) -> seq { e1; e2 }
+        | Bridge edges -> edges |> List.collect (fun (e1, e2) -> [e1; e2]) |> List.toSeq
 
 type TemplateVertexPosition =
     | Orthogonal of x: int * y: int
@@ -163,7 +171,9 @@ module Template =
             |> Result.requireTrue "Vertices cannot connect multiple warps"
     }
 
-    /// Generate a level from the template using Wave Function Collapse.
+    // TODO: Should validation take place before generation rather than being separate function?
+
+    /// Generate a solution for the template.
     let generate random (template: Template) = result {
         let initialDomains (graph: Graph<TemplateVertex, TemplateEdge>): Map<Guid, Domain<GeneratorDomain>> =
             graph
@@ -180,11 +190,15 @@ module Template =
                     let pathDomains =
                         edges
                         |> List.allPairs edges
-                        |> List.filter (fun (e1, e2) -> e1 < e2)
-                        |> List.map (fun (e1, e2) -> GeneratorDomain.Path (e1, e2), 1.0)
+                        |> List.filter (fun (a, b) -> a < b)
+                        |> List.map (fun (a, b) -> GeneratorDomain.Path (a, b), 1.0)
+
+                    let terminalDomains =
+                        edges
+                        |> List.map (fun e -> GeneratorDomain.Terminal e, 1.0)
                     
                     let domains =
-                        (GeneratorDomain.Terminal, 1.0) :: pathDomains
+                        terminalDomains @ pathDomains
                         |> Map.ofList
                     
                     Some (vertexId, domains)
@@ -208,470 +222,277 @@ module Template =
         let initialGlobalState (g: Graph<TemplateVertex, TemplateEdge>): GeneratorState =
             { TerminalWeight = 1.0 / 6.0 }
 
-        let getUsedEdges domain =
-            match domain with
-            | GeneratorDomain.Terminal -> Set.empty
-            | GeneratorDomain.Path (e1, e2) -> Set.ofList [e1; e2]
-            | GeneratorDomain.Bridge edges -> edges |> List.collect (fun (e1, e2) -> [e1; e2]) |> Set.ofList
+        /// Ensure vertices collapse into a compatible state with neighboring collapsed vertices
+        let neighborConsistencyConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
+            fun vertexId currentDomain collapsed graph _ ->
+                let neighbors = Graph.getNeighbors vertexId graph
 
-        // Rule: Two adjacent non-terminal vertices must agree on whether they use their connecting edge
-        let edgeConsistencyConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
                 currentDomain
                 |> Map.map (fun domain weight ->
-                    let usedEdges = getUsedEdges domain
-                    let isValid =
+                    let requiredEdges =
                         neighbors
-                        |> List.forall (fun rel ->
-                            let weUseEdge = Set.contains rel.EdgeId usedEdges
-                            match Map.tryFind rel.VertexId collapsed with
-                            | None -> true
-                            | Some neighborDomain ->
-                                match domain, neighborDomain with
-                                | GeneratorDomain.Path _, GeneratorDomain.Path (ne1, ne2) ->
-                                    let neighborUsesEdge = ne1 = rel.EdgeId || ne2 = rel.EdgeId
-                                    weUseEdge = neighborUsesEdge
-                                | GeneratorDomain.Path _, GeneratorDomain.Bridge nEdges ->
-                                    let neighborUsesEdge = nEdges |> List.exists (fun (e1, e2) -> e1 = rel.EdgeId || e2 = rel.EdgeId)
-                                    weUseEdge = neighborUsesEdge
-                                | GeneratorDomain.Bridge myEdges, GeneratorDomain.Path (ne1, ne2) ->
-                                    let weUseThisEdge = myEdges |> List.exists (fun (e1, e2) -> e1 = rel.EdgeId || e2 = rel.EdgeId)
-                                    let neighborUsesEdge = ne1 = rel.EdgeId || ne2 = rel.EdgeId
-                                    weUseThisEdge = neighborUsesEdge
-                                | GeneratorDomain.Bridge myEdges, GeneratorDomain.Bridge nEdges ->
-                                    let weUseThisEdge = myEdges |> List.exists (fun (e1, e2) -> e1 = rel.EdgeId || e2 = rel.EdgeId)
-                                    let neighborUsesEdge = nEdges |> List.exists (fun (e1, e2) -> e1 = rel.EdgeId || e2 = rel.EdgeId)
-                                    weUseThisEdge = neighborUsesEdge
-                                | GeneratorDomain.Terminal, _ -> true
-                                | _, GeneratorDomain.Terminal -> true
+                        |> Seq.collect (fun rel ->
+                            Map.tryFind rel.VertexId collapsed
+                            |> Option.map (GeneratorDomain.edges >> Seq.filter ((=) rel.EdgeId))
+                            |> Option.defaultValue Seq.empty
                         )
-                    if isValid then weight else 0.0
-                )
 
-        // Rule: All terminal vertices must connect to exactly one path edge
-        let terminalOnePathConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
+                    let optionalEdges = // TODO: Should this consider potential uncollapsed neighbor domains?
+                        neighbors
+                        |> Seq.collect (fun rel ->
+                            Map.tryFind rel.VertexId collapsed
+                            |> Option.map (fun _ -> Seq.empty)
+                            |> Option.defaultValue (Seq.singleton rel.EdgeId)
+                        )
+
+                    /// Ensure neighboring edges are compatible with the current domain
+                    let isEdgeConsistent =
+                        match domain with
+                        | GeneratorDomain.Terminal e ->
+                            Seq.tryExactlyOne requiredEdges
+                            |> Option.map ((=) e)
+                            |> Option.defaultValue false
+
+                        | GeneratorDomain.Path (e1, e2) ->
+                            let hasUnexpectedRequired = Seq.exists (fun e -> e <> e1 && e <> e2) requiredEdges
+                            let allowsEdge1 = Seq.contains e1 optionalEdges || Seq.contains e1 requiredEdges
+                            let allowsEdge2 = Seq.contains e2 optionalEdges || Seq.contains e2 requiredEdges
+
+                            not hasUnexpectedRequired && allowsEdge1 && allowsEdge2
+
+                        | GeneratorDomain.Bridge edges ->
+                            let bridgeEdges = edges |> Seq.collect (fun (e1, e2) -> [e1; e2])
+
+                            let hasUnexpectedRequired =
+                                Seq.exists (fun e -> not <| Seq.contains e bridgeEdges) requiredEdges
+
+                            let allowsAllBridgeEdges =
+                                bridgeEdges
+                                |> Seq.forall (fun e -> Seq.contains e optionalEdges || Seq.contains e requiredEdges)
+
+                            not hasUnexpectedRequired && allowsAllBridgeEdges
+
+                    /// Ensure neighboring vertex types are compatible with the current domain
+                    let isTypeConsistent =
+                        neighbors
+                        |> Seq.collect (fun rel ->
+                            Map.tryFind rel.VertexId collapsed
+                            |> Option.map (fun d -> [d])
+                            |> Option.defaultValue []
+                        )
+                        |> Seq.forall (fun neighborDomain ->
+                            match domain, neighborDomain with
+                            | GeneratorDomain.Terminal _, GeneratorDomain.Bridge _ -> false
+                            | GeneratorDomain.Bridge _, GeneratorDomain.Terminal _ -> false
+                            | _, _ -> true
+                        )
+
+                    if isEdgeConsistent && isTypeConsistent then weight
+                    else 0.0
+
+                    // TODO: Ensure warp edges dont join incompatible domains
+                )
+                |> Map.filter (fun _ weight -> weight <> 0.0)
+
+        /// Ensure that all continuous lines end with terminals
+        let lineTerminationConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
             fun vertexId currentDomain collapsed graph state ->
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
+                currentDomain // TODO: Implement
+
+        /// Ensure continuous lines do not have available shortcuts
+        let lineShortcutConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
+            fun vertexId currentDomain collapsed graph state ->
+                currentDomain // TODO: Implement
+
+        /// Multiply domain weights by multipliers defined in the generator state
+        let weightMultiplierConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
+            fun _ currentDomain _ _ state ->
                 currentDomain
                 |> Map.map (fun domain weight ->
                     match domain with
-                    | GeneratorDomain.Terminal ->
-                        let connectingPathCount =
-                            neighbors
-                            |> List.filter (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some (GeneratorDomain.Path (e1, e2)) -> e1 = rel.EdgeId || e2 = rel.EdgeId
-                                | Some (GeneratorDomain.Bridge bridgeEdges) ->
-                                    bridgeEdges |> List.exists (fun (e1, e2) -> e1 = rel.EdgeId || e2 = rel.EdgeId)
-                                | _ -> false
-                            )
-                            |> List.length
-                        
-                        let uncollapsedCount =
-                            neighbors
-                            |> List.filter (fun rel -> not (Map.containsKey rel.VertexId collapsed))
-                            |> List.length
-                        
-                        let neighborTerminalNeedsPath =
-                            neighbors
-                            |> List.exists (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some GeneratorDomain.Terminal ->
-                                    let termNeighbors = Graph.getNeighbors rel.VertexId graph |> Seq.toList
-                                    let termHasPath =
-                                        termNeighbors
-                                        |> List.exists (fun tn ->
-                                            match Map.tryFind tn.VertexId collapsed with
-                                            | Some (GeneratorDomain.Path (e1, e2)) -> e1 = tn.EdgeId || e2 = tn.EdgeId
-                                            | _ -> false
-                                        )
-                                    not termHasPath
-                                | _ -> false
-                            )
-                        
-                        if neighborTerminalNeedsPath then 0.0
-                        elif connectingPathCount > 1 then 0.0
-                        elif connectingPathCount = 1 then weight
-                        elif uncollapsedCount = 0 && connectingPathCount = 0 then 0.0
-                        else weight
-                    | _ -> weight
-                )
-
-        // Rule: A path cannot connect two terminals directly
-        let pathMaxOneTerminalConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Path (e1, e2) ->
-                        let getNeighborByEdge edgeId =
-                            neighbors |> List.tryFind (fun rel -> rel.EdgeId = edgeId)
-                        
-                        let terminalCount =
-                            [e1; e2]
-                            |> List.choose getNeighborByEdge
-                            |> List.filter (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some GeneratorDomain.Terminal -> true
-                                | _ -> false
-                            )
-                            |> List.length
-                        
-                        if terminalCount > 1 then 0.0 else weight
-                    | _ -> weight
-                )
-
-        // Rule: A bridge vertex cannot connect directly to a terminal
-        let bridgeNoTerminalConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Terminal ->
-                        let adjacentToBridge =
-                            neighbors
-                            |> List.exists (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some (GeneratorDomain.Bridge _) -> true
-                                | _ -> false
-                            )
-                        if adjacentToBridge then 0.0 else weight
-                    | GeneratorDomain.Bridge _ ->
-                        let adjacentToTerminal =
-                            neighbors
-                            |> List.exists (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some GeneratorDomain.Terminal -> true
-                                | _ -> false
-                            )
-                        if adjacentToTerminal then 0.0 else weight
-                    | _ -> weight
-                )
-
-        // Rule: A warp edge cannot connect directly to a terminal or bridge
-        let warpConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                let warpNeighbors =
-                    Graph.getNeighbors vertexId graph
-                    |> Seq.filter (fun rel -> rel.Edge.Type = Warp)
-                    |> Seq.toList
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Terminal when not warpNeighbors.IsEmpty -> 0.0
-                    | GeneratorDomain.Bridge _ when not warpNeighbors.IsEmpty -> 0.0
-                    | GeneratorDomain.Path (e1, e2) ->
-                        let usedEdges = Set.ofList [e1; e2]
-                        let badWarp =
-                            warpNeighbors
-                            |> List.exists (fun rel ->
-                                Set.contains rel.EdgeId usedEdges &&
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some GeneratorDomain.Terminal -> true
-                                | Some (GeneratorDomain.Bridge _) -> true
-                                | _ -> false
-                            )
-                        if badWarp then 0.0 else weight
-                    | _ -> weight
-                )
-
-        // Rule: All continuous paths must start and end at terminal vertices (no cycles)
-        // Also: Two terminals connected by the same path chain is invalid (same line can't start and end at adjacent terminals)
-        let noCyclesConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Path (e1, e2) ->
-                        let rec trace visited currentVertex fromEdge =
-                            if Set.contains currentVertex visited then Some (false, None) // Cycle detected
-                            else
-                                match Map.tryFind currentVertex collapsed with
-                                | Some GeneratorDomain.Terminal -> Some (true, Some currentVertex) // Found terminal
-                                | Some (GeneratorDomain.Path (pe1, pe2)) ->
-                                    let nextEdge = if pe1 = fromEdge then pe2 else pe1
-                                    graph
-                                    |> Graph.getNeighbors currentVertex
-                                    |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
-                                    |> Option.bind (fun n -> trace (Set.add currentVertex visited) n.VertexId nextEdge)
-                                | Some (GeneratorDomain.Bridge _) -> None
-                                | None -> None
-                        
-                        let traceEdge edgeId =
-                            graph
-                            |> Graph.getNeighbors vertexId
-                            |> Seq.tryFind (fun n -> n.EdgeId = edgeId)
-                            |> Option.bind (fun n -> trace (Set.singleton vertexId) n.VertexId edgeId)
-                        
-                        let result1 = traceEdge e1
-                        let result2 = traceEdge e2
-                        
-                        match result1, result2 with
-                        | Some (false, _), _ | _, Some (false, _) -> 0.0 // Cycle detected
-                        | Some (true, Some t1), Some (true, Some t2) when t1 = t2 -> 0.0 // Both ends lead to same terminal
-                        | _ -> weight
-                    
-                    | GeneratorDomain.Terminal ->
-                        // Check if any neighbor terminal can be reached through the path network
-                        // If so, this terminal and that terminal would be on the same line
-                        let neighborTerminals =
-                            Graph.getNeighbors vertexId graph
-                            |> Seq.choose (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some GeneratorDomain.Terminal -> Some rel.VertexId
-                                | _ -> None
-                            )
-                            |> Set.ofSeq
-                        
-                        if Set.isEmpty neighborTerminals then weight
-                        else
-                            // Trace from each neighbor path to see if it reaches any of our neighbor terminals
-                            let rec traceToTerminal visited currentVertex fromEdge =
-                                if Set.contains currentVertex visited then None
-                                else
-                                    match Map.tryFind currentVertex collapsed with
-                                    | Some GeneratorDomain.Terminal -> Some currentVertex
-                                    | Some (GeneratorDomain.Path (pe1, pe2)) ->
-                                        let nextEdge = if pe1 = fromEdge then pe2 else pe1
-                                        graph
-                                        |> Graph.getNeighbors currentVertex
-                                        |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
-                                        |> Option.bind (fun n -> traceToTerminal (Set.add currentVertex visited) n.VertexId nextEdge)
-                                    | _ -> None
-                            
-                            let reachableTerminals =
-                                Graph.getNeighbors vertexId graph
-                                |> Seq.choose (fun rel ->
-                                    match Map.tryFind rel.VertexId collapsed with
-                                    | Some (GeneratorDomain.Path (pe1, pe2)) when pe1 = rel.EdgeId || pe2 = rel.EdgeId ->
-                                        // This path connects to us, trace through it
-                                        let nextEdge = if pe1 = rel.EdgeId then pe2 else pe1
-                                        graph
-                                        |> Graph.getNeighbors rel.VertexId
-                                        |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
-                                        |> Option.bind (fun n -> traceToTerminal (Set.ofList [vertexId; rel.VertexId]) n.VertexId nextEdge)
-                                    | _ -> None
-                                )
-                                |> Set.ofSeq
-                            
-                            // If we can reach any of our neighbor terminals through paths, invalid
-                            // This means the neighbor terminal and us are on the same line with an unused edge between us
-                            if Set.intersect neighborTerminals reachableTerminals |> Set.isEmpty |> not then 0.0
-                            else weight
-                    
-                    | _ -> weight
-                )
-
-        // Rule: A path connecting to a terminal must ensure that terminal doesn't already have another path
-        let pathTerminalExclusiveConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Path (e1, e2) ->
-                        let usedEdges = Set.ofList [e1; e2]
-                        // Check each terminal neighbor - if we connect to it, it shouldn't already have a path
-                        let wouldDoubleConnectTerminal =
-                            neighbors
-                            |> List.exists (fun rel ->
-                                // We connect to this neighbor
-                                Set.contains rel.EdgeId usedEdges &&
-                                // Neighbor is a terminal
-                                (match Map.tryFind rel.VertexId collapsed with
-                                 | Some GeneratorDomain.Terminal ->
-                                     // Check if terminal already has another path connecting to it
-                                     let termNeighbors = Graph.getNeighbors rel.VertexId graph |> Seq.toList
-                                     termNeighbors
-                                     |> List.exists (fun tn ->
-                                         tn.VertexId <> vertexId &&
-                                         match Map.tryFind tn.VertexId collapsed with
-                                         | Some (GeneratorDomain.Path (pe1, pe2)) ->
-                                             pe1 = tn.EdgeId || e2 = tn.EdgeId
-                                         | _ -> false
-                                     )
-                                 | _ -> false)
-                            )
-                        if wouldDoubleConnectTerminal then 0.0 else weight
-                    | _ -> weight
-                )
-
-        // Rule: Continuous lines must only have path edges connecting parts of the path and terminals,
-        // with no other edges connecting part of the path to itself (no shortcuts/loops)
-        let noShortcutsConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                // Helper to trace the entire line from a starting point and collect all vertices on that line
-                let rec collectLineVertices visited currentVertex fromEdgeOpt =
-                    if Set.contains currentVertex visited then visited
-                    else
-                        let visited = Set.add currentVertex visited
-                        match Map.tryFind currentVertex collapsed with
-                        | Some GeneratorDomain.Terminal -> visited // Terminal is end of line
-                        | Some (GeneratorDomain.Path (pe1, pe2)) ->
-                            // Continue in both directions (or one if we came from somewhere)
-                            let nextEdges = 
-                                match fromEdgeOpt with
-                                | Some fromEdge -> [if pe1 = fromEdge then pe2 else pe1]
-                                | None -> [pe1; pe2]
-                            nextEdges
-                            |> List.fold (fun acc nextEdge ->
-                                graph
-                                |> Graph.getNeighbors currentVertex
-                                |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
-                                |> Option.map (fun n -> collectLineVertices acc n.VertexId (Some nextEdge))
-                                |> Option.defaultValue acc
-                            ) visited
-                        | _ -> visited
-                
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
-                
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Terminal ->
-                        // Find all vertices on the same line
-                        // by tracing through connecting paths
-                        let lineVertices =
-                            neighbors
-                            |> List.fold (fun acc rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some (GeneratorDomain.Path (pe1, pe2)) when pe1 = rel.EdgeId || pe2 = rel.EdgeId ->
-                                    // This path connects to us, trace the whole line
-                                    collectLineVertices acc rel.VertexId (Some rel.EdgeId)
-                                | _ -> acc
-                            ) (Set.singleton vertexId)
-                        
-                        // Check if any ADJACENT vertex (neighbor via ANY edge) is also on our line
-                        // but connected via an edge that ISN'T part of the path
-                        let hasShortcut =
-                            neighbors
-                            |> List.exists (fun rel ->
-                                // Is this neighbor on our line?
-                                let neighborOnLine = Set.contains rel.VertexId lineVertices
-                                // Is the edge to them used by the path? (for terminals, no edges are "used")
-                                let edgeUsedByNeighbor =
-                                    match Map.tryFind rel.VertexId collapsed with
-                                    | Some (GeneratorDomain.Path (pe1, pe2)) -> pe1 = rel.EdgeId || pe2 = rel.EdgeId
-                                    | _ -> false // Terminals don't use edges
-                                
-                                // Shortcut = neighbor is on our line but edge isn't used
-                                neighborOnLine && not edgeUsedByNeighbor
-                            )
-                        
-                        if hasShortcut then 0.0 else weight
-                    
-                    | GeneratorDomain.Path (e1, e2) ->
-                        let usedEdges = Set.ofList [e1; e2]
-                        
-                        // Collect all vertices on the same line
-                        let lineVertices = collectLineVertices Set.empty vertexId None
-                        
-                        // Check if any neighbor via UNUSED edge is on the same line
-                        let hasShortcut =
-                            neighbors
-                            |> List.exists (fun rel ->
-                                // Edge is not used by this path
-                                not (Set.contains rel.EdgeId usedEdges) &&
-                                // But neighbor is on the same line
-                                Set.contains rel.VertexId lineVertices
-                            )
-                        
-                        if hasShortcut then 0.0 else weight
-                    
-                    | _ -> weight
-                )
-
-        // Rule: Two adjacent terminals that are both on the same line is invalid
-        // This is simpler than full shortcut detection: just check if both terminals can be traced to each other
-        let adjacentTerminalSameLineConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
-                
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Terminal ->
-                        // Check if we have an adjacent terminal
-                        let adjacentTerminals =
-                            neighbors
-                            |> List.choose (fun rel ->
-                                match Map.tryFind rel.VertexId collapsed with
-                                | Some GeneratorDomain.Terminal -> Some rel
-                                | _ -> None
-                            )
-                        
-                        if List.isEmpty adjacentTerminals then weight
-                        else
-                            // For each adjacent terminal, check if we can reach it through the path network
-                            // If we can, then we're on the same line and the direct edge is a shortcut
-                            let rec traceToVertex target visited currentVertex fromEdge =
-                                if currentVertex = target then true
-                                elif Set.contains currentVertex visited then false
-                                else
-                                    match Map.tryFind currentVertex collapsed with
-                                    | Some GeneratorDomain.Terminal -> false // Hit a different terminal
-                                    | Some (GeneratorDomain.Path (pe1, pe2)) ->
-                                        let nextEdge = if pe1 = fromEdge then pe2 else pe1
-                                        graph
-                                        |> Graph.getNeighbors currentVertex
-                                        |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
-                                        |> Option.map (fun n -> traceToVertex target (Set.add currentVertex visited) n.VertexId nextEdge)
-                                        |> Option.defaultValue false
-                                    | _ -> false
-                        
-                            // Check from each of our path neighbors if they can reach any adjacent terminal
-                            let canReachAdjacentTerminal =
-                                adjacentTerminals
-                                |> List.exists (fun adjTerm ->
-                                    // Try to reach this adjacent terminal through the path network
-                                    neighbors
-                                    |> List.exists (fun rel ->
-                                        rel.VertexId <> adjTerm.VertexId && // Don't take the direct route
-                                        match Map.tryFind rel.VertexId collapsed with
-                                        | Some (GeneratorDomain.Path (pe1, pe2)) when pe1 = rel.EdgeId || pe2 = rel.EdgeId ->
-                                            // This path connects to us, trace through it
-                                            let nextEdge = if pe1 = rel.EdgeId then pe2 else pe1
-                                            graph
-                                            |> Graph.getNeighbors rel.VertexId
-                                            |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
-                                            |> Option.map (fun n -> traceToVertex adjTerm.VertexId (Set.ofList [vertexId; rel.VertexId]) n.VertexId nextEdge)
-                                            |> Option.defaultValue false
-                                        | _ -> false
-                                    )
-                                )
-                        
-                            if canReachAdjacentTerminal then 0.0 else weight
-                    | _ -> weight
-                )
-
-        // Bias toward fewer terminals
-        let terminalWeightConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
-                currentDomain
-                |> Map.map (fun domain weight ->
-                    match domain with
-                    | GeneratorDomain.Terminal -> weight * state.TerminalWeight
+                    | GeneratorDomain.Terminal _ -> weight * state.TerminalWeight
                     | _ -> weight
                 )
 
         let constraints = [
-            edgeConsistencyConstraint
-            terminalOnePathConstraint
-            pathMaxOneTerminalConstraint
-            bridgeNoTerminalConstraint
-            warpConstraint
-            noCyclesConstraint
-            pathTerminalExclusiveConstraint
-            noShortcutsConstraint
-            adjacentTerminalSameLineConstraint
-            terminalWeightConstraint
+            neighborConsistencyConstraint
+            lineTerminationConstraint
+            lineShortcutConstraint
+            weightMultiplierConstraint
         ]
-        
-        // TODO: Constraints do not work and are a failed claude attempt, need to be rewritten by hand
-        
+
+        //// Rule: All continuous paths must start and end at terminal vertices (no cycles)
+        //// Also: Two terminals connected by the same path chain is invalid (same line can't start and end at adjacent terminals)
+        //let noCyclesConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
+        //    fun vertexId currentDomain collapsed graph state ->
+        //        currentDomain
+        //        |> Map.map (fun domain weight ->
+        //            match domain with
+        //            | GeneratorDomain.Path (e1, e2) ->
+        //                let rec trace visited currentVertex fromEdge =
+        //                    if Set.contains currentVertex visited then Some (false, None) // Cycle detected
+        //                    else
+        //                        match Map.tryFind currentVertex collapsed with
+        //                        | Some GeneratorDomain.Terminal -> Some (true, Some currentVertex) // Found terminal
+        //                        | Some (GeneratorDomain.Path (pe1, pe2)) ->
+        //                            let nextEdge = if pe1 = fromEdge then pe2 else pe1
+        //                            graph
+        //                            |> Graph.getNeighbors currentVertex
+        //                            |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
+        //                            |> Option.bind (fun n -> trace (Set.add currentVertex visited) n.VertexId nextEdge)
+        //                        | Some (GeneratorDomain.Bridge _) -> None
+        //                        | None -> None
+                        
+        //                let traceEdge edgeId =
+        //                    graph
+        //                    |> Graph.getNeighbors vertexId
+        //                    |> Seq.tryFind (fun n -> n.EdgeId = edgeId)
+        //                    |> Option.bind (fun n -> trace (Set.singleton vertexId) n.VertexId edgeId)
+                        
+        //                let result1 = traceEdge e1
+        //                let result2 = traceEdge e2
+                        
+        //                match result1, result2 with
+        //                | Some (false, _), _ | _, Some (false, _) -> 0.0 // Cycle detected
+        //                | Some (true, Some t1), Some (true, Some t2) when t1 = t2 -> 0.0 // Both ends lead to same terminal
+        //                | _ -> weight
+                    
+        //            | GeneratorDomain.Terminal ->
+        //                // Check if any neighbor terminal can be reached through the path network
+        //                // If so, this terminal and that terminal would be on the same line
+        //                let neighborTerminals =
+        //                    Graph.getNeighbors vertexId graph
+        //                    |> Seq.choose (fun rel ->
+        //                        match Map.tryFind rel.VertexId collapsed with
+        //                        | Some GeneratorDomain.Terminal -> Some rel.VertexId
+        //                        | _ -> None
+        //                    )
+        //                    |> Set.ofSeq
+                        
+        //                if Set.isEmpty neighborTerminals then weight
+        //                else
+        //                    // Trace from each neighbor path to see if it reaches any of our neighbor terminals
+        //                    let rec traceToTerminal visited currentVertex fromEdge =
+        //                        if Set.contains currentVertex visited then None
+        //                        else
+        //                            match Map.tryFind currentVertex collapsed with
+        //                            | Some GeneratorDomain.Terminal -> Some currentVertex
+        //                            | Some (GeneratorDomain.Path (pe1, pe2)) ->
+        //                                let nextEdge = if pe1 = fromEdge then pe2 else pe1
+        //                                graph
+        //                                |> Graph.getNeighbors currentVertex
+        //                                |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
+        //                                |> Option.bind (fun n -> traceToTerminal (Set.add currentVertex visited) n.VertexId nextEdge)
+        //                            | _ -> None
+                            
+        //                    let reachableTerminals =
+        //                        Graph.getNeighbors vertexId graph
+        //                        |> Seq.choose (fun rel ->
+        //                            match Map.tryFind rel.VertexId collapsed with
+        //                            | Some (GeneratorDomain.Path (pe1, pe2)) when pe1 = rel.EdgeId || pe2 = rel.EdgeId ->
+        //                                // This path connects to us, trace through it
+        //                                let nextEdge = if pe1 = rel.EdgeId then pe2 else pe1
+        //                                graph
+        //                                |> Graph.getNeighbors rel.VertexId
+        //                                |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
+        //                                |> Option.bind (fun n -> traceToTerminal (Set.ofList [vertexId; rel.VertexId]) n.VertexId nextEdge)
+        //                            | _ -> None
+        //                        )
+        //                        |> Set.ofSeq
+                            
+        //                    // If we can reach any of our neighbor terminals through paths, invalid
+        //                    // This means the neighbor terminal and us are on the same line with an unused edge between us
+        //                    if Set.intersect neighborTerminals reachableTerminals |> Set.isEmpty |> not then 0.0
+        //                    else weight
+                    
+        //            | _ -> weight
+        //        )
+
+        //// Rule: Continuous lines must only have path edges connecting parts of the path and terminals,
+        //// with no other edges connecting part of the path to itself (no shortcuts/loops)
+        //let noShortcutsConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
+        //    fun vertexId currentDomain collapsed graph state ->
+        //        // Helper to trace the entire line from a starting point and collect all vertices on that line
+        //        let rec collectLineVertices visited currentVertex fromEdgeOpt =
+        //            if Set.contains currentVertex visited then visited
+        //            else
+        //                let visited = Set.add currentVertex visited
+        //                match Map.tryFind currentVertex collapsed with
+        //                | Some GeneratorDomain.Terminal -> visited // Terminal is end of line
+        //                | Some (GeneratorDomain.Path (pe1, pe2)) ->
+        //                    // Continue in both directions (or one if we came from somewhere)
+        //                    let nextEdges = 
+        //                        match fromEdgeOpt with
+        //                        | Some fromEdge -> [if pe1 = fromEdge then pe2 else pe1]
+        //                        | None -> [pe1; pe2]
+        //                    nextEdges
+        //                    |> List.fold (fun acc nextEdge ->
+        //                        graph
+        //                        |> Graph.getNeighbors currentVertex
+        //                        |> Seq.tryFind (fun n -> n.EdgeId = nextEdge)
+        //                        |> Option.map (fun n -> collectLineVertices acc n.VertexId (Some nextEdge))
+        //                        |> Option.defaultValue acc
+        //                    ) visited
+        //                | _ -> visited
+                
+        //        let neighbors = Graph.getNeighbors vertexId graph |> Seq.toList
+                
+        //        currentDomain
+        //        |> Map.map (fun domain weight ->
+        //            match domain with
+        //            | GeneratorDomain.Terminal ->
+        //                // Find all vertices on the same line
+        //                // by tracing through connecting paths
+        //                let lineVertices =
+        //                    neighbors
+        //                    |> List.fold (fun acc rel ->
+        //                        match Map.tryFind rel.VertexId collapsed with
+        //                        | Some (GeneratorDomain.Path (pe1, pe2)) when pe1 = rel.EdgeId || pe2 = rel.EdgeId ->
+        //                            // This path connects to us, trace the whole line
+        //                            collectLineVertices acc rel.VertexId (Some rel.EdgeId)
+        //                        | _ -> acc
+        //                    ) (Set.singleton vertexId)
+                        
+        //                // Check if any ADJACENT vertex (neighbor via ANY edge) is also on our line
+        //                // but connected via an edge that ISN'T part of the path
+        //                let hasShortcut =
+        //                    neighbors
+        //                    |> List.exists (fun rel ->
+        //                        // Is this neighbor on our line?
+        //                        let neighborOnLine = Set.contains rel.VertexId lineVertices
+        //                        // Is the edge to them used by the path? (for terminals, no edges are "used")
+        //                        let edgeUsedByNeighbor =
+        //                            match Map.tryFind rel.VertexId collapsed with
+        //                            | Some (GeneratorDomain.Path (pe1, pe2)) -> pe1 = rel.EdgeId || pe2 = rel.EdgeId
+        //                            | _ -> false // Terminals don't use edges
+                                
+        //                        // Shortcut = neighbor is on our line but edge isn't used
+        //                        neighborOnLine && not edgeUsedByNeighbor
+        //                    )
+                        
+        //                if hasShortcut then 0.0 else weight
+                    
+        //            | GeneratorDomain.Path (e1, e2) ->
+        //                let usedEdges = Set.ofList [e1; e2]
+                        
+        //                // Collect all vertices on the same line
+        //                let lineVertices = collectLineVertices Set.empty vertexId None
+                        
+        //                // Check if any neighbor via UNUSED edge is on the same line
+        //                let hasShortcut =
+        //                    neighbors
+        //                    |> List.exists (fun rel ->
+        //                        // Edge is not used by this path
+        //                        not (Set.contains rel.EdgeId usedEdges) &&
+        //                        // But neighbor is on the same line
+        //                        Set.contains rel.VertexId lineVertices
+        //                    )
+                        
+        //                if hasShortcut then 0.0 else weight
+                    
+        //            | _ -> weight
+        //        )
+
         let! collapsed =
             template.Graph
             |> WaveFunctionCollapse.init random initialDomains initialGlobalState constraints

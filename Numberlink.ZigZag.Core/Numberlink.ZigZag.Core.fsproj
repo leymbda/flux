@@ -6,9 +6,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="lib\Extensions\Guid.fs" />
-    <Compile Include="Lib\Extensions\List.fs" />
-    <Compile Include="Lib\Extensions\Map.fs" />
+    <Compile Include="Extensions\Guid.fs" />
+    <Compile Include="Extensions\List.fs" />
+    <Compile Include="Extensions\Map.fs" />
     <Compile Include="Lib\Graph.fs" />
     <Compile Include="Lib\WaveFunctionCollapse.fs" />
     <Compile Include="Template.fs" />
