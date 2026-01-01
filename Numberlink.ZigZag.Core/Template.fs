@@ -4,11 +4,6 @@ open FsToolkit.ErrorHandling
 open Numberlink.ZigZag.Core.Lib
 open System
 
-type GeneratorState = {
-    /// The weight for probability of a vertex being a terminal instead of path.
-    TerminalWeight: float
-}
-
 type GeneratorDomain =
     | Terminal of edge: Guid
     | Path of edges: Guid * Guid
@@ -219,12 +214,9 @@ module Template =
             )
             |> Map.ofSeq
 
-        let initialGlobalState (g: Graph<TemplateVertex, TemplateEdge>): GeneratorState =
-            { TerminalWeight = 1.0 / 6.0 }
-
         /// Ensure vertices collapse into a compatible state with neighboring collapsed vertices
-        let neighborConsistencyConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph _ ->
+        let neighborConsistencyConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorDomain> =
+            fun vertexId currentDomain collapsed graph ->
                 let neighbors = Graph.getNeighbors vertexId graph
 
                 currentDomain
@@ -249,9 +241,10 @@ module Template =
                     let isEdgeConsistent =
                         match domain with
                         | GeneratorDomain.Terminal e ->
-                            Seq.tryExactlyOne requiredEdges
-                            |> Option.map ((=) e)
-                            |> Option.defaultValue false
+                            match Seq.toList requiredEdges, Seq.contains e optionalEdges with
+                            | [], true -> true
+                            | [r], _ when r = e -> true
+                            | _, _ -> false
 
                         | GeneratorDomain.Path (e1, e2) ->
                             let hasUnexpectedRequired = Seq.exists (fun e -> e <> e1 && e <> e2) requiredEdges
@@ -295,24 +288,27 @@ module Template =
                 |> Map.filter (fun _ weight -> weight <> 0.0)
 
         /// Ensure that all continuous lines end with terminals
-        let lineTerminationConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
+        let lineTerminationConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorDomain> =
+            fun vertexId currentDomain collapsed graph ->
                 currentDomain // TODO: Implement
 
         /// Ensure continuous lines do not have available shortcuts
-        let lineShortcutConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun vertexId currentDomain collapsed graph state ->
+        let lineShortcutConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorDomain> =
+            fun vertexId currentDomain collapsed graph ->
                 currentDomain // TODO: Implement
 
         /// Multiply domain weights by multipliers defined in the generator state
-        let weightMultiplierConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorState, GeneratorDomain> =
-            fun _ currentDomain _ _ state ->
+        let weightMultiplierConstraint: Constraint<TemplateVertex, TemplateEdge, GeneratorDomain> =
+            fun _ currentDomain _ _ ->
                 currentDomain
                 |> Map.map (fun domain weight ->
                     match domain with
-                    | GeneratorDomain.Terminal _ -> weight * state.TerminalWeight
+                    | GeneratorDomain.Terminal _ -> weight //* (1.0 / 6.0)
                     | _ -> weight
                 )
+
+        // TODO: Remove global state from WFC (cannot even be updated, so pointless)
+        // TODO: Add extra constraints as needed e.g. bridge reflection constraint
 
         let constraints = [
             neighborConsistencyConstraint
@@ -495,7 +491,7 @@ module Template =
 
         let! collapsed =
             template.Graph
-            |> WaveFunctionCollapse.init random initialDomains initialGlobalState constraints
+            |> WaveFunctionCollapse.init random initialDomains constraints
             |> WaveFunctionCollapse.run
             |> Result.requireSome "Failed to generate level from template"
 

@@ -38,12 +38,7 @@ module Domain =
         if isSingleton domain then Some (getSingleton domain)
         else None
 
-    let choicesByWeight domain =
-        domain
-        |> Map.toList
-        |> List.sortByDescending snd
-        |> List.map fst
-
+    /// Returns a random state from the domain, with probabilities determined by their weights.
     let observe (random: Random) domain =
         let rec pick threshold remaining =
             match remaining with
@@ -56,16 +51,24 @@ module Domain =
         domain
         |> Map.toList
         |> pick (random.NextDouble() * total domain)
+        
+    /// Exhaustively observe all possible states and return them in order as a list.
+    let observeAll random domain =
+        let rec loop acc domain =
+            match observe random domain with
+            | None -> List.rev acc
+            | Some state -> loop (state :: acc) (Map.remove state domain)
 
-type Constraint<'v, 'e, 'g, 's when 's : comparison> =
-    Guid -> Domain<'s> -> Map<Guid, 's> -> Graph<'v, 'e> -> 'g -> Domain<'s>
+        loop [] domain
 
-type WaveFunctionCollapse<'v, 's, 'e, 'g when 's : comparison> = {
+type Constraint<'v, 'e, 's when 's : comparison> =
+    Guid -> Domain<'s> -> Map<Guid, 's> -> Graph<'v, 'e> -> Domain<'s>
+
+type WaveFunctionCollapse<'v, 's, 'e when 's : comparison> = {
     Random: Random
     Domains: Map<Guid, Domain<'s>>
     Collapsed: Map<Guid, 's>
-    GlobalState: 'g
-    Constraints: Constraint<'v, 'e, 'g, 's> list
+    Constraints: Constraint<'v, 'e, 's> list
     Graph: Graph<'v, 'e>
 }
 
@@ -82,11 +85,10 @@ module WaveFunctionCollapse =
 
         // TODO: Probably unnecessary, and incorrect ordering of params if kept
 
-    let init random initialDomains initialGlobalState constraints graph = {
+    let init random initialDomains constraints graph = {
         Random = random
         Domains = initialDomains graph
         Collapsed = Map.empty
-        GlobalState = initialGlobalState graph
         Constraints = constraints
         Graph = graph
     }
@@ -119,7 +121,7 @@ module WaveFunctionCollapse =
         |> Option.defaultValue Map.empty
         |> fun initialDomain ->
             wfc.Constraints
-            |> List.fold (fun domain c -> c vertexId domain wfc.Collapsed wfc.Graph wfc.GlobalState) initialDomain
+            |> List.fold (fun domain c -> c vertexId domain wfc.Collapsed wfc.Graph) initialDomain
         |> Map.filter (fun _ w -> w > 0.0)
 
     let propagate newlyCollapsed wfc =
@@ -182,10 +184,8 @@ module WaveFunctionCollapse =
             match tryPickLowestEntropy wfc with
             | None -> Some wfc.Collapsed
             | Some id ->
-                match Map.tryFind id wfc.Domains with // TODO: Can probably just be Map.find or merge domain fetch into tryPickLowestEntropy
-                | Some domain when not (Domain.isEmpty domain) ->
-                    tryChoices stack wfc id (Domain.choicesByWeight domain)
-                | _ -> backtrack stack
+                let domain = Map.find id wfc.Domains
+                tryChoices stack wfc id (Domain.observeAll wfc.Random domain)
 
         and tryChoices stack wfc id = function
             | [] -> backtrack stack
@@ -195,11 +195,11 @@ module WaveFunctionCollapse =
                 | Some wfc -> solve newStack wfc
                 | None -> tryChoices stack wfc id rest
 
-            // TODO: Only picks lowest entropy choice, should randomise among choices
-
         and backtrack = function
             | [] -> None
             | (wfc, id, choices) :: rest -> tryChoices rest wfc id choices
 
         collapseGuaranteed wfc
         |> Option.bind (solve [])
+
+        // TODO: Rewrite to be cleaner and more readable
