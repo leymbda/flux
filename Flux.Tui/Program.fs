@@ -1,28 +1,27 @@
-﻿open Flux.Tui
-open Numberlink.ZigZag.Core
+﻿open Numberlink.ZigZag.Core
 open System
 
-let seed = 1;
+let seed = (new Random()).Next()
 let random = new Random(seed)
 
-let vertex1 = Guid.NewGuid()
-let vertex2 = Guid.NewGuid()
-let vertex3 = Guid.NewGuid()
-let vertex4 = Guid.NewGuid()
-let vertex6 = Guid.NewGuid()
-let vertex7 = Guid.NewGuid()
-let vertex8 = Guid.NewGuid()
-let vertex9 = Guid.NewGuid()
-let edge1 = Guid.NewGuid()
-let edge2 = Guid.NewGuid()
-let edge3 = Guid.NewGuid()
-let edge4 = Guid.NewGuid()
-let edge5 = Guid.NewGuid()
-let edge6 = Guid.NewGuid()
-let edge7 = Guid.NewGuid()
-let edge8 = Guid.NewGuid()
+let vertex1 = Guid.generate random
+let vertex2 = Guid.generate random
+let vertex3 = Guid.generate random
+let vertex4 = Guid.generate random
+let vertex6 = Guid.generate random
+let vertex7 = Guid.generate random
+let vertex8 = Guid.generate random
+let vertex9 = Guid.generate random
+let edge1 = Guid.generate random
+let edge2 = Guid.generate random
+let edge3 = Guid.generate random
+let edge4 = Guid.generate random
+let edge5 = Guid.generate random
+let edge6 = Guid.generate random
+let edge7 = Guid.generate random
+let edge8 = Guid.generate random
 
-let template =
+let template = // 3x3 donut shape
     Template.empty
     |> Template.addUnobserved vertex1 (Orthogonal(0, 0))
     |> Template.addUnobserved vertex2 (Orthogonal(0, 1))
@@ -41,18 +40,19 @@ let template =
     |> Template.addPath vertex7 vertex4 edge7
     |> Template.addPath vertex4 vertex1 edge8
 
-    // 3x3 donut shape
+for _ in 0..9 do Console.WriteLine()
 
 let level =
-    Level.generate random (Guid.NewGuid()) template
-    |> fun l ->
-        { l with
-            Links = [
-                [edge1; edge2; edge3; edge4]
-                [edge5; edge6; edge7; edge8]
-            ]
-        }
-        
-    // Temporary until WFC implemented, tested, and working
+    Level.generate random (Guid.generate random) template
+    |> Result.defaultWith (fun err ->
+        printfn "Error generating level: %s" err
+        exit 1
+    )
 
-App.program level
+level.Template.Graph.Vertices
+|> Map.iter (fun vertexId vertex ->
+    match vertex.Position with
+    | Orthogonal (x, y) ->
+        let position = sprintf "(%d, %d)" x y
+        printfn "  Vertex %A position %s" vertexId position
+)

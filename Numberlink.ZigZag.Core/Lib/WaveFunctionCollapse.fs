@@ -1,4 +1,4 @@
-namespace rec Numberlink.ZigZag.Core.Lib
+namespace Numberlink.ZigZag.Core.Lib
 
 open System
 
@@ -58,7 +58,7 @@ module Domain =
         |> pick (random.NextDouble() * total domain)
 
 type Constraint<'v, 'e, 'g, 's when 's : comparison> =
-    Guid -> Map<Guid, 's> -> Graph<'v, 'e> -> 'g -> float
+    Guid -> Domain<'s> -> Map<Guid, 's> -> Graph<'v, 'e> -> 'g -> Domain<'s>
 
 type WaveFunctionCollapse<'v, 's, 'e, 'g when 's : comparison> = {
     Random: Random
@@ -113,15 +113,9 @@ module WaveFunctionCollapse =
         wfc.Domains
         |> Map.tryFind vertexId
         |> Option.defaultValue Map.empty
-        |> Map.map (fun state weight ->
-            let hypothetical = Map.add vertexId state wfc.Collapsed
-
-            let factor =
-                wfc.Constraints
-                |> List.fold (fun acc c -> acc * c vertexId hypothetical wfc.Graph wfc.GlobalState) 1.0
-
-            weight * factor
-        )
+        |> fun initialDomain ->
+            wfc.Constraints
+            |> List.fold (fun domain c -> c vertexId domain wfc.Collapsed wfc.Graph wfc.GlobalState) initialDomain
         |> Map.filter (fun _ w -> w > 0.0)
 
     let propagate newlyCollapsed wfc =

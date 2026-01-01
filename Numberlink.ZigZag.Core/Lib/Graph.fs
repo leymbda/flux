@@ -159,9 +159,9 @@ module Graph =
     let getNeighbors vertexId (graph: Graph<'v, 'e>) =
         AdjacencyList.getNeighbors vertexId graph.AdjacencyList
         |> Map.toSeq
-        |> Seq.choose (fun (_, edgeId) ->
-            match getEdge edgeId graph, getVertex vertexId graph with
-            | Some edge, Some vertex -> Some { VertexId = vertexId; Vertex = vertex; EdgeId = edgeId; Edge = edge }
+        |> Seq.choose (fun (neighborId, edgeId) ->
+            match getEdge edgeId graph, getVertex neighborId graph with
+            | Some edge, Some vertex -> Some { VertexId = neighborId; Vertex = vertex; EdgeId = edgeId; Edge = edge }
             | _ -> None
         )
 

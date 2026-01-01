@@ -51,9 +51,9 @@ module TerminalRenderer =
             |> Array.map (fun (a, b) ->
                 Array.init (Array2D.length2 terminal.Content) (fun i -> TerminalPixel.create (a.[i]) (b.[i]))
                 |> Array.map TerminalPixel.toString
-                |> String.join ""
+                |> String.concat ""
             )
-            |> String.join "\n"
+            |> String.concat "\n"
             |> Console.Write
         )
 

@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="lib\Extensions\Guid.fs" />
     <Compile Include="Lib\Extensions\List.fs" />
     <Compile Include="Lib\Extensions\Map.fs" />
     <Compile Include="Lib\Graph.fs" />

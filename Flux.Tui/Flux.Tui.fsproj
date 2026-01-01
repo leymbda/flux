@@ -11,7 +11,6 @@
   <ItemGroup>
     <Compile Include="lib\extensions\Array.fs" />
     <Compile Include="lib\extensions\Array2D.fs" />
-    <Compile Include="lib\extensions\String.fs" />
     <Compile Include="lib\TerminalDisplay.fs" />
     <Compile Include="App.fs" />
     <Compile Include="Program.fs" />
